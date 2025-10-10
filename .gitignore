@@ -1,0 +1,16 @@
+# Archivos sensibles
+*.env
+*.key
+config_private.py
+credenciales/
+
+# Cache Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+*.log
+
+# Base de datos (si tiene datos reales, descomenta la línea siguiente)
+# *.db
