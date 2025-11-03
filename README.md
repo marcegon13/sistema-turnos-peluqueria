@@ -1,23 +1,16 @@
-# 🏪 Sistema de Turnos - NEW STATION
+# 🏪 Sistema de Turnos - NEW STATION Peluquerías
 
 Sistema de gestión de turnos para peluquería con integración WhatsApp.
 
-## ✨ Características
+## 🚀 Instalación y Uso
 
-- ✅ Gestión completa de turnos
-- ✅ Integración con WhatsApp
-- ✅ Base de datos SQLite
-- ✅ Interfaz gráfica moderna
+### Opción 1: Ejecutable (Recomendado)
+Descarga `SistemaTurnos.exe` desde [Releases](https://github.com/marcegon13/sistema-turnos-peluqueria/releases) y ejecútalo.
 
-## 🚀 Descarga
-
-[Descargar última versión](https://github.com/tu-usuario/tu-repo/releases)
-
-## 🛠️ Desarrollo
-
+### Opción 2: Código fuente
 ```bash
 # Clonar repositorio
-git clone https://github.com/tu-usuario/tu-repo.git
+git clone https://github.com/marcegon13/sistema-turnos-peluqueria.git
 
 # Instalar dependencias
 pip install -r requirements.txt
