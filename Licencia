@@ -1,0 +1,16 @@
+
+## 🔧 **Para agregar los archivos al repo:**
+
+```bash
+# Estar en la carpeta raíz del proyecto
+cd /c/wamp64/www/Turnos_Peluqueria_Minimalista
+
+# Ver qué archivos hay
+ls -la
+
+# Agregar los archivos de documentación
+git add README.md LICENSE CHANGELOG.md
+
+# Commit y push
+git commit -m "docs: Add project documentation"
+git push origin main

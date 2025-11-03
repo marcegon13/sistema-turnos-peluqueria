@@ -6,11 +6,53 @@ credenciales/
 
 # Cache Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.spec
 
 # Logs
 *.log
+logs/
 
-# Base de datos (si tiene datos reales, descomenta la línea siguiente)
-# *.db
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Entornos virtuales
+.venv/
+venv/
+ENV/
+env/
+
+# Backup files
+*.bak
+*.backup
+
+# Temporal
+temp/
+tmp/

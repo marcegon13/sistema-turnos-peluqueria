@@ -7,12 +7,14 @@ import traceback
 import sys
 import urllib.parse
 import webbrowser
+import pyperclip
+import shutil
 
 class AppTurnosPeluqueria:
     def __init__(self, root):
         self.root = root
         self.configurar_interfaz()
-        self.conectar_bd()
+        self.inicializar_base_datos()  # ✅ CAMBIADO: Método mejorado
         self.cargar_profesionales()
         self.crear_componentes()
         self.cargar_turnos()
@@ -32,21 +34,53 @@ class AppTurnosPeluqueria:
         }
 
     def get_db_path(self):
+        """Obtiene la ruta donde debe estar la base de datos"""
         if getattr(sys, 'frozen', False):
+            # Si es ejecutable, usar directorio del ejecutable
             base_path = os.path.dirname(sys.executable)
         else:
+            # Si es script, usar directorio del script
             base_path = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(base_path, 'turnos_peluqueria.db')
+        
+        db_path = os.path.join(base_path, 'turnos_peluqueria.db')
+        print(f"📁 Ruta de BD: {db_path}")
+        return db_path
+
+    def inicializar_base_datos(self):
+        """Inicializa la base de datos de manera robusta"""
+        try:
+            db_path = self.get_db_path()
+            
+            # Verificar si necesitamos copiar la BD
+            if not os.path.exists(db_path):
+                print("🔍 Base de datos no encontrada en el directorio actual...")
+                
+                # Buscar en el directorio de trabajo
+                trabajo_path = os.path.join(os.getcwd(), 'turnos_peluqueria.db')
+                if os.path.exists(trabajo_path):
+                    print(f"📋 Copiando BD desde: {trabajo_path}")
+                    shutil.copy2(trabajo_path, db_path)
+                    print("✅ Base de datos copiada exitosamente")
+                else:
+                    print("🆕 Creando nueva base de datos...")
+            
+            # Conectar y reparar
+            self.conectar_bd()
+            self.reparar_base_datos()
+            
+        except Exception as e:
+            print(f'❌ Error inicializando BD: {e}')
+            messagebox.showerror('Error', f'No se pudo inicializar la base de datos: {e}')
 
     def conectar_bd(self):
         try:
             db_path = self.get_db_path()
-            print(f"📁 Conectando a: {db_path}")
+            print(f"🔗 Conectando a: {db_path}")
             
             self.conexion = sqlite3.connect(db_path)
             self.cursor = self.conexion.cursor()
             
-            # Crear tabla si no existe
+            # Crear tabla con estructura completa
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS turnos (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,6 +90,7 @@ class AppTurnosPeluqueria:
                     estilista TEXT NOT NULL,
                     manicura TEXT NOT NULL,
                     servicios_manicura TEXT,
+                    servmanicura TEXT,
                     fecha TEXT NOT NULL,
                     hora TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -68,6 +103,44 @@ class AppTurnosPeluqueria:
         except Exception as e:
             print(f'❌ Error BD: {e}')
             messagebox.showerror('Error', f'No se pudo conectar: {e}')
+
+    def reparar_base_datos(self):
+        """Repara la estructura de la base de datos agregando columnas faltantes"""
+        try:
+            print("🔧 Verificando estructura de la base de datos...")
+            
+            self.cursor.execute("PRAGMA table_info(turnos)")
+            columnas = [col[1] for col in self.cursor.fetchall()]
+            print(f"📊 Columnas actuales: {columnas}")
+            
+            # Columnas que deberían existir según tu código
+            columnas_necesarias = [
+                'servicios_manicura',
+                'servmanicura',
+                'servicio',
+                'manicura',
+                'estilista',
+                'fecha',
+                'hora'
+            ]
+            
+            columnas_agregadas = []
+            for columna in columnas_necesarias:
+                if columna not in columnas:
+                    print(f"🔄 Agregando columna '{columna}'...")
+                    self.cursor.execute(f'ALTER TABLE turnos ADD COLUMN {columna} TEXT')
+                    self.conexion.commit()
+                    columnas_agregadas.append(columna)
+                    print(f"✅ Columna '{columna}' agregada")
+            
+            if columnas_agregadas:
+                print(f"🎯 Columnas agregadas: {columnas_agregadas}")
+            else:
+                print("✅ Estructura de BD correcta")
+            
+        except Exception as e:
+            print(f"❌ Error al reparar BD: {e}")
+            messagebox.showerror('Error BD', f'Error en estructura: {e}')
 
     def cargar_profesionales(self):
         self.estilistas = [
@@ -332,29 +405,38 @@ Confirmamos tu turno en *NEW STATION - Pueyrredon*:
 
 ¡Te esperamos! 🎉"""
         
-        # Codificar mensaje para URL
-        mensaje_codificado = urllib.parse.quote(mensaje)
-        
-        # Crear URL de WhatsApp
-        url_whatsapp = f"https://web.whatsapp.com/send?phone=54{telefono_limpio}&text={mensaje_codificado}"
-        
-        # ✅ MEJORA: REUTILIZAR LA MISMA PESTAÑA DE WHATSAPP
+        # ✅ MEJORA DEFINITIVA: COPIAR AL PORTAPAPELES + OPCIONES FLEXIBLES
         try:
-            # Intentar reutilizar la misma pestaña/ventana
-            webbrowser.open(url_whatsapp, new=0)  # new=0 reusa la misma ventana
+            # 1. COPIAR MENSAJE AL PORTAPAPELES
+            pyperclip.copy(mensaje)
+            
+            # 2. OPCIONAL: Abrir WhatsApp Web (solo si no está abierto)
+            try:
+                # Intentar abrir en misma pestaña si ya está abierto
+                mensaje_codificado = urllib.parse.quote(mensaje)
+                url_whatsapp = f"https://web.whatsapp.com/send?phone=54{telefono_limpio}&text={mensaje_codificado}"
+                webbrowser.open(url_whatsapp, new=0)  # new=0 reusa misma ventana
+            except:
+                # Si falla, solo copiar al portapapeles
+                pass
+            
+            # 3. MENSAJE MEJORADO CON MÚLTIPLES OPCIONES
+            messagebox.showinfo(
+                'WhatsApp Listo 🚀', 
+                f'✅ *TODO COPIADO* para {nombre}\n\n'
+                f'📱 *NÚMERO:* {telefono_limpio}\n'
+                f'💬 *MENSAJE:* (copiado al portapapeles)\n\n'
+                f'*OPCIONES RÁPIDAS:*\n'
+                f'1. 📋 Pegar mensaje en WhatsApp Web/Desktop (Ctrl+V)\n'
+                f'2. 📞 Buscar número: {telefono_limpio}\n' 
+                f'3. 🖱️ Click en ENVIAR\n\n'
+                f'*¡Listo en segundos!* ⚡\n'
+                f'(Se abrió WhatsApp Web si no estaba abierto)'
+            )
+            
         except Exception as e:
-            # Fallback: abrir normalmente
-            webbrowser.open(url_whatsapp)
-        
-        # Mensaje más breve y claro para el usuario
-        messagebox.showinfo(
-            'WhatsApp Listo ✅', 
-            f'✅ Mensaje listo para {nombre}\n\n'
-            f'📱 Se abrió WhatsApp Web\n'
-            f'💬 Mensaje pre-escrito\n'
-            f'➤ Solo hacé click en ENVIAR\n\n'
-            f'¡Listo en 1 segundo! ⚡'
-        )
+            # Fallback por si pyperclip falla
+            messagebox.showerror('Error', f'No se pudo copiar al portapapeles: {e}')
 
     def crear_boton_redondeado(self, parent, text, color, command=None, width=12):
         return tk.Button(parent, text=text, bg=color, fg='white', font=('Arial', 9, 'bold'),
@@ -511,6 +593,7 @@ Confirmamos tu turno en *NEW STATION - Pueyrredon*:
             for item in self.tabla.get_children(): 
                 self.tabla.delete(item)
             
+            # ✅ CORRECCIÓN 2: Búsqueda mejorada que prioriza clientes
             self.cursor.execute('''
                 SELECT * FROM turnos 
                 WHERE LOWER(nombre) LIKE ? 
@@ -519,9 +602,14 @@ Confirmamos tu turno en *NEW STATION - Pueyrredon*:
                    OR LOWER(servicio) LIKE ?
                    OR LOWER(manicura) LIKE ?
                    OR LOWER(servicios_manicura) LIKE ?
-                ORDER BY fecha ASC, hora ASC
-            ''', (f'%{texto_busqueda}%', f'%{texto_busqueda}%', f'%{texto_busqueda}%',
-                  f'%{texto_busqueda}%', f'%{texto_busqueda}%', f'%{texto_busqueda}%'))
+                ORDER BY 
+                    CASE WHEN LOWER(nombre) LIKE ? THEN 1 ELSE 2 END,
+                    fecha ASC, hora ASC
+            ''', (
+                f'%{texto_busqueda}%', f'%{texto_busqueda}%', f'%{texto_busqueda}%',
+                f'%{texto_busqueda}%', f'%{texto_busqueda}%', f'%{texto_busqueda}%',
+                f'%{texto_busqueda}%'  # Para el ORDER BY
+            ))
 
             turnos = self.cursor.fetchall()
             
@@ -546,10 +634,10 @@ Confirmamos tu turno en *NEW STATION - Pueyrredon*:
                     self.tabla.item(item, tags=(color_fondo,))
                     self.tabla.tag_configure(color_fondo, background=color_fondo)
 
-                self.label_estado.config(text=f'{len(turnos)} turnos encontrados', fg=self.estilos['exito'])
+                self.label_estado.config(text=f'✅ {len(turnos)} turnos encontrados para "{texto_busqueda}"', fg=self.estilos['exito'])
             else:
                 self.tabla.insert('', tk.END, values=('', 'No se encontraron turnos', '', '', '', '', '', '', ''))
-                self.label_estado.config(text='No se encontraron turnos', fg=self.estilos['peligro'])
+                self.label_estado.config(text=f'❌ No se encontraron turnos para "{texto_busqueda}"', fg=self.estilos['peligro'])
 
         except Exception as err:
             messagebox.showerror('Error BD', f'No se pudieron buscar los turnos: {err}')
@@ -760,6 +848,63 @@ Confirmamos tu turno en *NEW STATION - Pueyrredon*:
             messagebox.showwarning('Error', 'Complete los campos obligatorios: Nombre, Teléfono, Estilista, Manicura y Hora')
             return
 
+        # ✅ CORRECCIÓN 1: Validación de turnos duplicados
+        try:
+            # Verificar duplicado exacto (misma persona, misma fecha, misma hora)
+            self.cursor.execute('''
+                SELECT COUNT(*) FROM turnos 
+                WHERE nombre = ? AND fecha = ? AND hora = ?
+            ''', (nombre, fecha, hora))
+            
+            turno_duplicado = self.cursor.fetchone()[0] > 0
+            
+            if turno_duplicado:
+                messagebox.showwarning(
+                    'Turno Duplicado', 
+                    f'❌ Ya existe un turno para {nombre} el {fecha_str} a las {hora}\n\n'
+                    f'Por favor, verifique los datos o elija otra fecha/hora.'
+                )
+                return
+
+            # Validación extra: Verificar superposición de estilista
+            self.cursor.execute('''
+                SELECT COUNT(*) FROM turnos 
+                WHERE estilista = ? AND fecha = ? AND hora = ? AND estilista != "No aplica"
+            ''', (estilista, fecha, hora))
+            
+            estilista_ocupado = self.cursor.fetchone()[0] > 0
+            
+            if estilista_ocupado:
+                respuesta = messagebox.askyesno(
+                    'Estilista Ocupado', 
+                    f'⚠️ {estilista} ya tiene un turno el {fecha_str} a las {hora}\n\n'
+                    f'¿Desea agregar el turno de todas formas?'
+                )
+                if not respuesta:
+                    return
+
+            # Validación extra: Verificar superposición de manicura
+            self.cursor.execute('''
+                SELECT COUNT(*) FROM turnos 
+                WHERE manicura = ? AND fecha = ? AND hora = ? AND manicura != "No aplica"
+            ''', (manicura, fecha, hora))
+            
+            manicura_ocupada = self.cursor.fetchone()[0] > 0
+            
+            if manicura_ocupada:
+                respuesta = messagebox.askyesno(
+                    'Manicura Ocupada', 
+                    f'⚠️ {manicura} ya tiene un turno el {fecha_str} a las {hora}\n\n'
+                    f'¿Desea agregar el turno de todas formas?'
+                )
+                if not respuesta:
+                    return
+
+        except Exception as err:
+            print(f"❌ Error en validación: {err}")
+            # Continuar con la inserción si hay error en la validación
+
+        # Si pasó todas las validaciones, insertar el turno
         try:
             self.cursor.execute('''
                 INSERT INTO turnos 
@@ -768,7 +913,7 @@ Confirmamos tu turno en *NEW STATION - Pueyrredon*:
             ''', (nombre, telefono, servicios, estilista, manicura, servicios_manicura, fecha, hora))
 
             self.conexion.commit()
-            messagebox.showinfo('Éxito', 'Turno agregado correctamente')
+            messagebox.showinfo('Éxito', '✅ Turno agregado correctamente')
             self.limpiar_formulario()
             self.cargar_turnos()
         except Exception as err:
