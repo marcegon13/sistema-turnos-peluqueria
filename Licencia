@@ -1,16 +1,8 @@
+Copyright (c) 2024 NEW STATION Peluquerías - Marcelo
 
-## 🔧 **Para agregar los archivos al repo:**
+Todos los derechos reservados.
 
-```bash
-# Estar en la carpeta raíz del proyecto
-cd /c/wamp64/www/Turnos_Peluqueria_Minimalista
+Este software y su código fuente son propiedad de NEW STATION Peluquerías.
+Se prohíbe la reproducción, distribución y uso comercial sin autorización expresa.
 
-# Ver qué archivos hay
-ls -la
-
-# Agregar los archivos de documentación
-git add README.md LICENSE CHANGELOG.md
-
-# Commit y push
-git commit -m "docs: Add project documentation"
-git push origin main
+Solo se permite la visualización con fines educativos y de portfolio.
