@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import messagebox, ttk
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import os
 import sqlite3
 import traceback
@@ -14,7 +14,7 @@ class AppTurnosPeluqueria:
     def __init__(self, root):
         self.root = root
         self.configurar_interfaz()
-        self.inicializar_base_datos()  # ✅ CAMBIADO: Método mejorado
+        self.inicializar_base_datos()
         self.cargar_profesionales()
         self.crear_componentes()
         self.cargar_turnos()
@@ -22,24 +22,23 @@ class AppTurnosPeluqueria:
         self.agregar_doble_click()
     
     def configurar_interfaz(self):
-        self.root.title('NEW STATION - Sistema de Turnos + WhatsApp')
-        self.root.geometry('1300x800')
+        self.root.title('NEW STATION - Sistema de Turnos')
+        self.root.geometry('1400x800')
         self.root.configure(bg='#f8f9fa')
         self.estilos = {
             'fondo': '#f8f9fa', 'primario': '#007bff', 'secundario': '#6c757d', 
             'exito': '#28a745', 'peligro': '#dc3545', 'advertencia': '#ffc107',
             'info': '#17a2b8', 'texto_oscuro': '#343a40', 'texto_claro': '#6c757d',
             'borde': '#dee2e6', 'card_bg': '#ffffff', 'whatsapp': '#25D366',
-            'turno_pasado': '#ffebee', 'turno_presente': '#e3f2fd', 'turno_futuro': '#e8f5e8'
+            'turno_pasado': '#ffebee', 'turno_presente': '#e3f2fd', 'turno_futuro': '#e8f5e8',
+            'ausencia': '#ffcccc'  # 🆕 Color para días de ausencia
         }
 
     def get_db_path(self):
         """Obtiene la ruta donde debe estar la base de datos"""
         if getattr(sys, 'frozen', False):
-            # Si es ejecutable, usar directorio del ejecutable
             base_path = os.path.dirname(sys.executable)
         else:
-            # Si es script, usar directorio del script
             base_path = os.path.dirname(os.path.abspath(__file__))
         
         db_path = os.path.join(base_path, 'turnos_peluqueria.db')
@@ -51,11 +50,9 @@ class AppTurnosPeluqueria:
         try:
             db_path = self.get_db_path()
             
-            # Verificar si necesitamos copiar la BD
             if not os.path.exists(db_path):
                 print("🔍 Base de datos no encontrada en el directorio actual...")
                 
-                # Buscar en el directorio de trabajo
                 trabajo_path = os.path.join(os.getcwd(), 'turnos_peluqueria.db')
                 if os.path.exists(trabajo_path):
                     print(f"📋 Copiando BD desde: {trabajo_path}")
@@ -64,7 +61,6 @@ class AppTurnosPeluqueria:
                 else:
                     print("🆕 Creando nueva base de datos...")
             
-            # Conectar y reparar
             self.conectar_bd()
             self.reparar_base_datos()
             
@@ -80,7 +76,7 @@ class AppTurnosPeluqueria:
             self.conexion = sqlite3.connect(db_path)
             self.cursor = self.conexion.cursor()
             
-            # Crear tabla con estructura completa
+            # Tabla de turnos (existente)
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS turnos (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,13 +86,25 @@ class AppTurnosPeluqueria:
                     estilista TEXT NOT NULL,
                     manicura TEXT NOT NULL,
                     servicios_manicura TEXT,
-                    servmanicura TEXT,
                     fecha TEXT NOT NULL,
                     hora TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     whatsapp_enviado BOOLEAN DEFAULT 0
                 )
             ''')
+            
+            # 🆕 NUEVA TABLA PARA AUSENCIAS
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS ausencias (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    profesional TEXT NOT NULL,
+                    tipo TEXT NOT NULL,
+                    fecha TEXT NOT NULL,
+                    motivo TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
             self.conexion.commit()
             print('✅ Base de datos lista')
             
@@ -105,7 +113,7 @@ class AppTurnosPeluqueria:
             messagebox.showerror('Error', f'No se pudo conectar: {e}')
 
     def reparar_base_datos(self):
-        """Repara la estructura de la base de datos agregando columnas faltantes"""
+        """Repara la estructura de la base de datos"""
         try:
             print("🔧 Verificando estructura de la base de datos...")
             
@@ -113,10 +121,22 @@ class AppTurnosPeluqueria:
             columnas = [col[1] for col in self.cursor.fetchall()]
             print(f"📊 Columnas actuales: {columnas}")
             
-            # Columnas que deberían existir según tu código
+            # ✅ CORRECCIÓN: Eliminar columna duplicada servmanicura si existe
+            if 'servmanicura' in columnas and 'servicios_manicura' in columnas:
+                print("🔄 Eliminando columna duplicada 'servmanicura'...")
+                self.cursor.execute('''
+                    CREATE TABLE temp_turnos AS 
+                    SELECT id, nombre, telefono, servicio, estilista, manicura, 
+                           servicios_manicura, fecha, hora, created_at, whatsapp_enviado
+                    FROM turnos
+                ''')
+                self.cursor.execute('DROP TABLE turnos')
+                self.cursor.execute('ALTER TABLE temp_turnos RENAME TO turnos')
+                self.conexion.commit()
+                print("✅ Columna duplicada eliminada")
+            
             columnas_necesarias = [
                 'servicios_manicura',
-                'servmanicura',
                 'servicio',
                 'manicura',
                 'estilista',
@@ -150,27 +170,486 @@ class AppTurnosPeluqueria:
         ]
         self.manicuras = ['Liliana Pavon', 'Noelia Leguizamon', 'No aplica']
 
+    # 🆕 NUEVO MÓDULO DE GESTIÓN DE AUSENCIAS
+    def gestionar_ausencias(self):
+        """Abre la ventana de gestión de ausencias"""
+        ventana = tk.Toplevel(self.root)
+        ventana.title('📅 Gestión de Ausencias - NEW STATION')
+        ventana.geometry('1000x700')
+        ventana.configure(bg=self.estilos['fondo'])
+        ventana.transient(self.root)
+        ventana.grab_set()
+
+        # Header
+        frame_header = tk.Frame(ventana, bg=self.estilos['primario'])
+        frame_header.pack(fill=tk.X, pady=(0, 20))
+        tk.Label(frame_header, text='📅 GESTIÓN DE AUSENCIAS', 
+                font=('Arial', 16, 'bold'), bg=self.estilos['primario'], 
+                fg='white', padx=20, pady=15).pack()
+
+        # Contenido principal
+        frame_main = tk.Frame(ventana, bg=self.estilos['fondo'], padx=20, pady=20)
+        frame_main.pack(fill=tk.BOTH, expand=True)
+
+        # Selección de profesional
+        frame_seleccion = tk.Frame(frame_main, bg=self.estilos['fondo'])
+        frame_seleccion.pack(fill=tk.X, pady=(0, 20))
+
+        tk.Label(frame_seleccion, text='Seleccionar Profesional:', 
+                font=('Arial', 12, 'bold'), bg=self.estilos['fondo']).pack(side=tk.LEFT, padx=(0, 15))
+
+        # Combobox para seleccionar profesional
+        todos_profesionales = self.estilistas + self.manicuras
+        combo_profesional = ttk.Combobox(frame_seleccion, values=todos_profesionales, 
+                                       state='readonly', font=('Arial', 11), width=25)
+        combo_profesional.pack(side=tk.LEFT, padx=(0, 20))
+        
+        # Botón para abrir calendario
+        btn_abrir_calendario = tk.Button(frame_seleccion, text='📅 ABRIR CALENDARIO', 
+                                       bg=self.estilos['info'], fg='white',
+                                       font=('Arial', 10, 'bold'), padx=15, pady=8,
+                                       command=lambda: self.abrir_calendario_profesional(combo_profesional.get(), ventana))
+        btn_abrir_calendario.pack(side=tk.LEFT)
+
+        # Lista de ausencias existentes
+        frame_ausencias = tk.Frame(frame_main, bg=self.estilos['fondo'])
+        frame_ausencias.pack(fill=tk.BOTH, expand=True)
+
+        tk.Label(frame_ausencias, text='Ausencias Programadas:', 
+                font=('Arial', 12, 'bold'), bg=self.estilos['fondo']).pack(anchor='w', pady=(0, 10))
+
+        # Treeview para mostrar ausencias
+        tree_ausencias = ttk.Treeview(frame_ausencias, 
+                                    columns=('ID', 'Profesional', 'Fecha', 'Motivo'), 
+                                    show='headings', height=8)
+        
+        tree_ausencias.heading('ID', text='ID')
+        tree_ausencias.heading('Profesional', text='Profesional')
+        tree_ausencias.heading('Fecha', text='Fecha')
+        tree_ausencias.heading('Motivo', text='Motivo')
+
+        tree_ausencias.column('ID', width=50)
+        tree_ausencias.column('Profesional', width=150)
+        tree_ausencias.column('Fecha', width=100)
+        tree_ausencias.column('Motivo', width=200)
+
+        # Scrollbar
+        scrollbar = ttk.Scrollbar(frame_ausencias, orient=tk.VERTICAL, command=tree_ausencias.yview)
+        tree_ausencias.configure(yscrollcommand=scrollbar.set)
+
+        tree_ausencias.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Cargar ausencias existentes
+        def cargar_ausencias():
+            for item in tree_ausencias.get_children():
+                tree_ausencias.delete(item)
+            
+            try:
+                self.cursor.execute('SELECT * FROM ausencias ORDER BY fecha DESC')
+                ausencias = self.cursor.fetchall()
+                
+                for ausencia in ausencias:
+                    tree_ausencias.insert('', tk.END, values=ausencia)
+                    
+            except Exception as e:
+                print(f"❌ Error al cargar ausencias: {e}")
+
+        cargar_ausencias()
+
+        # Botón para eliminar ausencia
+        def eliminar_ausencia():
+            seleccion = tree_ausencias.selection()
+            if not seleccion:
+                messagebox.showwarning('Eliminar', 'Seleccione una ausencia para eliminar')
+                return
+            
+            ausencia_id = tree_ausencias.item(seleccion[0])['values'][0]
+            profesional = tree_ausencias.item(seleccion[0])['values'][1]
+            fecha = tree_ausencias.item(seleccion[0])['values'][2]
+            
+            if messagebox.askyesno('Confirmar', f'¿Eliminar ausencia de {profesional} para el {fecha}?'):
+                try:
+                    self.cursor.execute('DELETE FROM ausencias WHERE id = ?', (ausencia_id,))
+                    self.conexion.commit()
+                    messagebox.showinfo('Éxito', 'Ausencia eliminada correctamente')
+                    cargar_ausencias()
+                except Exception as e:
+                    messagebox.showerror('Error', f'No se pudo eliminar: {e}')
+
+        frame_botones = tk.Frame(frame_ausencias, bg=self.estilos['fondo'])
+        frame_botones.pack(fill=tk.X, pady=(10, 0))
+
+        btn_eliminar = tk.Button(frame_botones, text='🗑️ ELIMINAR AUSENCIA', 
+                               bg=self.estilos['peligro'], fg='white',
+                               font=('Arial', 10, 'bold'), padx=15, pady=8,
+                               command=eliminar_ausencia)
+        btn_eliminar.pack(side=tk.LEFT, padx=(0, 10))
+
+        btn_actualizar = tk.Button(frame_botones, text='🔄 ACTUALIZAR', 
+                                 bg=self.estilos['info'], fg='white',
+                                 font=('Arial', 10, 'bold'), padx=15, pady=8,
+                                 command=cargar_ausencias)
+        btn_actualizar.pack(side=tk.LEFT)
+
+    def abrir_calendario_profesional(self, profesional, ventana_parent):
+        """Abre el calendario individual para un profesional"""
+        if not profesional:
+            messagebox.showwarning('Seleccionar', 'Seleccione un profesional primero')
+            return
+        
+        ventana = tk.Toplevel(ventana_parent)
+        ventana.title(f'📅 Calendario - {profesional}')
+        ventana.geometry('800x600')
+        ventana.configure(bg=self.estilos['fondo'])
+        ventana.transient(ventana_parent)
+        ventana.grab_set()
+
+        # Header
+        frame_header = tk.Frame(ventana, bg=self.estilos['primario'])
+        frame_header.pack(fill=tk.X, pady=(0, 15))
+        tk.Label(frame_header, text=f'📅 CALENDARIO DE {profesional.upper()}', 
+                font=('Arial', 14, 'bold'), bg=self.estilos['primario'], 
+                fg='white', padx=20, pady=12).pack()
+
+        # Controles de mes/año
+        frame_controles = tk.Frame(ventana, bg=self.estilos['fondo'], padx=20, pady=10)
+        frame_controles.pack(fill=tk.X)
+
+        tk.Label(frame_controles, text='Año:', bg=self.estilos['fondo'], 
+                font=('Arial', 10, 'bold')).pack(side=tk.LEFT, padx=(0, 5))
+        
+        año_actual = datetime.now().year
+        años = [str(año) for año in range(año_actual, año_actual + 3)]
+        
+        combo_año = ttk.Combobox(frame_controles, values=años, width=8,
+                               state="readonly", font=("Arial", 10))
+        combo_año.set(str(año_actual))
+        combo_año.pack(side=tk.LEFT, padx=(0, 15))
+        
+        tk.Label(frame_controles, text="Mes:", bg=self.estilos["fondo"], 
+                font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=(0, 5))
+        
+        meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+                "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+        
+        combo_mes = ttk.Combobox(frame_controles, values=meses, width=12,
+                               state="readonly", font=("Arial", 10))
+        combo_mes.set(meses[datetime.now().month - 1])
+        combo_mes.pack(side=tk.LEFT)
+
+        # Frame para el calendario
+        frame_calendario = tk.Frame(ventana, bg=self.estilos['fondo'], padx=20, pady=10)
+        frame_calendario.pack(fill=tk.BOTH, expand=True)
+
+        # Días de la semana
+        dias_semana = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+        for i, dia in enumerate(dias_semana):
+            tk.Label(frame_calendario, text=dia, bg=self.estilos['fondo'], 
+                    font=('Arial', 10, 'bold'), width=10, height=2).grid(row=0, column=i, padx=2, pady=2)
+
+        # Función para cargar días de ausencia del profesional
+        def cargar_ausencias_profesional():
+            try:
+                self.cursor.execute('SELECT fecha FROM ausencias WHERE profesional = ?', (profesional,))
+                ausencias = [ausencia[0] for ausencia in self.cursor.fetchall()]
+                return ausencias
+            except Exception as e:
+                print(f"❌ Error al cargar ausencias: {e}")
+                return []
+
+        # Función para actualizar calendario
+        def actualizar_calendario():
+            # Limpiar calendario
+            for widget in frame_calendario.grid_slaves():
+                if int(widget.grid_info()["row"]) > 0:
+                    widget.destroy()
+            
+            mes_seleccionado = combo_mes.current() + 1
+            año_seleccionado = int(combo_año.get())
+            
+            primer_dia = datetime(año_seleccionado, mes_seleccionado, 1)
+            if mes_seleccionado == 12:
+                ultimo_dia = datetime(año_seleccionado + 1, 1, 1)
+            else:
+                ultimo_dia = datetime(año_seleccionado, mes_seleccionado + 1, 1)
+            
+            dias_en_mes = (ultimo_dia - primer_dia).days
+            dia_semana_inicio = primer_dia.weekday()
+            
+            # Cargar ausencias actuales
+            ausencias_actuales = cargar_ausencias_profesional()
+            
+            fila, columna = 1, dia_semana_inicio
+            for dia in range(1, dias_en_mes + 1):
+                fecha_actual = f"{año_seleccionado}-{mes_seleccionado:02d}-{dia:02d}"
+                fecha_mostrar = f"{dia:02d}/{mes_seleccionado:02d}/{año_seleccionado}"
+                
+                # Verificar si es día de ausencia
+                es_ausencia = fecha_actual in ausencias_actuales
+                
+                if es_ausencia:
+                    bg_color = self.estilos['ausencia']  # Rojo para ausencia
+                    texto = "🚫"
+                    tooltip = f"{fecha_mostrar}\n{profesional} NO ATIENDE"
+                else:
+                    bg_color = self.estilos['info']  # Azul para día normal
+                    texto = str(dia)
+                    tooltip = f"{fecha_mostrar}\nClick para marcar/desmarcar"
+                
+                btn_dia = tk.Button(
+                    frame_calendario,
+                    text=texto,
+                    font=("Arial", 9, "bold"),
+                    bg=bg_color,
+                    fg="white" if es_ausencia else "white",
+                    relief="solid",
+                    bd=1,
+                    width=8,
+                    height=2,
+                    command=lambda f=fecha_actual, d=dia, m=mes_seleccionado, a=año_seleccionado: 
+                    toggle_ausencia(f, f"{d:02d}/{m:02d}/{a}")
+                )
+                
+                # Tooltip
+                def make_tooltip(widget, text):
+                    def enter(event):
+                        tooltip = tk.Toplevel(widget)
+                        tooltip.wm_overrideredirect(True)
+                        tooltip.wm_geometry(f"+{event.x_root+10}+{event.y_root+10}")
+                        label = tk.Label(tooltip, text=text, bg="yellow", relief="solid", bd=1)
+                        label.pack()
+                        widget.tooltip = tooltip
+                    def leave(event):
+                        if hasattr(widget, 'tooltip'):
+                            widget.tooltip.destroy()
+                    widget.bind("<Enter>", enter)
+                    widget.bind("<Leave>", leave)
+                
+                make_tooltip(btn_dia, tooltip)
+                
+                # Marcar día actual
+                hoy = datetime.now()
+                if (dia == hoy.day and mes_seleccionado == hoy.month and 
+                    año_seleccionado == hoy.year):
+                    btn_dia.config(bg=self.estilos['exito'])
+                
+                btn_dia.grid(row=fila, column=columna, padx=2, pady=2)
+                
+                columna += 1
+                if columna > 6:
+                    columna = 0
+                    fila += 1
+
+        # ✅ CORRECCIÓN: Función toggle_ausencia mejorada
+        def toggle_ausencia(fecha_sql, fecha_mostrar):
+            try:
+                # Verificar si ya existe
+                self.cursor.execute('SELECT id FROM ausencias WHERE profesional = ? AND fecha = ?', 
+                                  (profesional, fecha_sql))
+                existe = self.cursor.fetchone()
+                
+                if existe:
+                    # Eliminar ausencia
+                    self.cursor.execute('DELETE FROM ausencias WHERE profesional = ? AND fecha = ?', 
+                                      (profesional, fecha_sql))
+                    mensaje = f'✅ {profesional} ahora SÍ atiende el {fecha_mostrar}'
+                else:
+                    # Agregar ausencia
+                    self.cursor.execute('INSERT INTO ausencias (profesional, tipo, fecha, motivo) VALUES (?, ?, ?, ?)',
+                                      (profesional, 'Día específico', fecha_sql, 'Ausencia programada'))
+                    mensaje = f'🚫 {profesional} NO atiende el {fecha_mostrar}'
+                
+                self.conexion.commit()
+                
+                # ✅ CORRECCIÓN: Usar after() para dar tiempo a la UI
+                ventana.after(100, actualizar_calendario)
+                
+                # ✅ CORRECCIÓN: Mensaje después de la actualización
+                ventana.after(150, lambda: messagebox.showinfo('Ausencia', mensaje))
+                
+            except Exception as e:
+                messagebox.showerror('Error', f'No se pudo actualizar: {e}')
+
+        # Configurar eventos
+        combo_mes.bind('<<ComboboxSelected>>', lambda e: actualizar_calendario())
+        combo_año.bind('<<ComboboxSelected>>', lambda e: actualizar_calendario())
+        
+        # Cargar calendario inicial
+        actualizar_calendario()
+
+    # 🆕 FUNCIÓN PARA VERIFICAR DISPONIBILIDAD
+    def verificar_disponibilidad(self, profesional, fecha_str):
+        """Verifica si un profesional está disponible en una fecha específica"""
+        try:
+            # Convertir fecha a formato SQL
+            fecha_obj = datetime.strptime(fecha_str, '%d/%m/%Y')
+            fecha_sql = fecha_obj.strftime('%Y-%m-%d')
+            
+            # Verificar en tabla de ausencias
+            self.cursor.execute('SELECT id FROM ausencias WHERE profesional = ? AND fecha = ?', 
+                              (profesional, fecha_sql))
+            
+            if self.cursor.fetchone():
+                return False  # No está disponible
+            return True  # Está disponible
+            
+        except Exception as e:
+            print(f"❌ Error al verificar disponibilidad: {e}")
+            return True  # Por defecto, asumir disponible
+
+    # 🆕 MODIFICAR LA FUNCIÓN agregar_turno PARA INCLUIR VALIDACIÓN DE AUSENCIAS
+    def agregar_turno(self):
+        nombre = self.entry_nombre.get().strip()
+        telefono = self.entry_telefono.get().strip()
+        servicios = self.entry_servicios.get().strip()
+        estilista = self.combo_estilista.get().strip()
+        manicura = self.combo_manicura.get().strip()
+        servicios_manicura = self.entry_servicios_manicura.get().strip()
+
+        fecha_str = self.entry_fecha.get()
+        try:
+            fecha_obj = datetime.strptime(fecha_str, '%d/%m/%Y')
+            fecha = fecha_obj.strftime('%Y-%m-%d')
+        except ValueError:
+            messagebox.showwarning('Error', 'Formato de fecha inválido. Use DD/MM/AAAA')
+            return
+
+        hora = self.entry_hora.get().strip()
+
+        if not all([nombre, telefono, estilista, manicura, hora]):
+            messagebox.showwarning('Error', 'Complete los campos obligatorios: Nombre, Teléfono, Estilista, Manicura y Hora')
+            return
+
+        # 🆕 VALIDACIÓN 1: Verificar ausencias de estilista
+        if estilista != "No aplica" and not self.verificar_disponibilidad(estilista, fecha_str):
+            messagebox.showerror(
+                'Estilista No Disponible', 
+                f'❌ {estilista} NO atiende el {fecha_str}\n\n'
+                f'Por favor, seleccione otra fecha o otro estilista.'
+            )
+            return
+
+        # 🆕 VALIDACIÓN 2: Verificar ausencias de manicura
+        if manicura != "No aplica" and not self.verificar_disponibilidad(manicura, fecha_str):
+            messagebox.showerror(
+                'Manicura No Disponible', 
+                f'❌ {manicura} NO atiende el {fecha_str}\n\n'
+                f'Por favor, seleccione otra fecha u otra manicura.'
+            )
+            return
+
+        # Resto de validaciones existentes...
+        # Validación de turnos duplicados
+        try:
+            self.cursor.execute('''
+                SELECT COUNT(*) FROM turnos 
+                WHERE nombre = ? AND fecha = ? AND hora = ?
+            ''', (nombre, fecha, hora))
+            
+            turno_duplicado = self.cursor.fetchone()[0] > 0
+            
+            if turno_duplicado:
+                messagebox.showwarning(
+                    'Turno Duplicado', 
+                    f'❌ Ya existe un turno para {nombre} el {fecha_str} a las {hora}\n\n'
+                    f'Por favor, verifique los datos o elija otra fecha/hora.'
+                )
+                return
+
+            # Validación extra: Verificar superposición de estilista
+            self.cursor.execute('''
+                SELECT COUNT(*) FROM turnos 
+                WHERE estilista = ? AND fecha = ? AND hora = ? AND estilista != "No aplica"
+            ''', (estilista, fecha, hora))
+            
+            estilista_ocupado = self.cursor.fetchone()[0] > 0
+            
+            if estilista_ocupado:
+                respuesta = messagebox.askyesno(
+                    'Estilista Ocupado', 
+                    f'⚠️ {estilista} ya tiene un turno el {fecha_str} a las {hora}\n\n'
+                    f'¿Desea agregar el turno de todas formas?'
+                )
+                if not respuesta:
+                    return
+
+            # Validación extra: Verificar superposición de manicura
+            self.cursor.execute('''
+                SELECT COUNT(*) FROM turnos 
+                WHERE manicura = ? AND fecha = ? AND hora = ? AND manicura != "No aplica"
+            ''', (manicura, fecha, hora))
+            
+            manicura_ocupada = self.cursor.fetchone()[0] > 0
+            
+            if manicura_ocupada:
+                respuesta = messagebox.askyesno(
+                    'Manicura Ocupada', 
+                    f'⚠️ {manicura} ya tiene un turno el {fecha_str} a las {hora}\n\n'
+                    f'¿Desea agregar el turno de todas formas?'
+                )
+                if not respuesta:
+                    return
+
+        except Exception as err:
+            print(f"❌ Error en validación: {err}")
+
+        # Si pasó todas las validaciones, insertar el turno
+        try:
+            self.cursor.execute('''
+                INSERT INTO turnos 
+                (nombre, telefono, servicio, estilista, manicura, servicios_manicura, fecha, hora)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (nombre, telefono, servicios, estilista, manicura, servicios_manicura, fecha, hora))
+
+            self.conexion.commit()
+            messagebox.showinfo('Éxito', '✅ Turno agregado correctamente')
+            self.limpiar_formulario()
+            self.cargar_turnos()
+        except Exception as err:
+            print(f"❌ Error al agregar: {err}")
+            messagebox.showerror('Error BD', f'No se pudo agregar: {err}')
+
+    # ... (el resto de tus funciones existentes se mantienen igual)
+    # Solo agregué las funciones nuevas arriba y modifiqué agregar_turno
+
     def determinar_color_turno(self, fecha_str, hora_str):
         """Determina el color según si el turno es pasado, presente o futuro"""
         try:
-            # Convertir fecha de DD/MM/AAAA a objeto date
-            fecha_turno = datetime.strptime(fecha_str, '%d/%m/%Y').date()
+            # ✅ CORRECCIÓN: Manejar diferentes formatos de fecha
+            fecha_turno = None
+            
+            # Intentar formato YYYY-MM-DD HH:MM:SS (de la base de datos)
+            try:
+                fecha_turno = datetime.strptime(fecha_str, '%Y-%m-%d %H:%M:%S').date()
+            except:
+                # Intentar formato YYYY-MM-DD
+                try:
+                    fecha_turno = datetime.strptime(fecha_str, '%Y-%m-%d').date()
+                except:
+                    # Intentar formato DD/MM/YYYY
+                    try:
+                        fecha_turno = datetime.strptime(fecha_str, '%d/%m/%Y').date()
+                    except:
+                        print(f"❌ No se pudo parsear fecha: {fecha_str}")
+                        return 'white'
+            
             fecha_actual = date.today()
             
-            # Comparar fechas
             if fecha_turno < fecha_actual:
-                return self.estilos['turno_pasado']  # ROSADO - Turno pasado
+                return self.estilos['turno_pasado']  # 🎀 ROSADO - Turno pasado
             elif fecha_turno > fecha_actual:
-                return self.estilos['turno_futuro']  # VERDE CLARO - Turno futuro
+                return self.estilos['turno_futuro']  # 🟢 VERDE CLARO - Turno futuro
             else:
                 # Misma fecha, verificar hora
                 hora_actual = datetime.now().strftime('%H:%M')
                 if hora_str < hora_actual:
-                    return self.estilos['turno_pasado']  # ROSADO - Turno de hoy que ya pasó
+                    return self.estilos['turno_pasado']  # 🎀 ROSADO - Turno de hoy que ya pasó
                 else:
-                    return self.estilos['turno_presente']  # CELESTE - Turno de hoy que viene
+                    return self.estilos['turno_presente']  # 🔵 CELESTE - Turno de hoy que viene
                     
-        except:
+        except Exception as e:
+            print(f"❌ Error en determinar_color_turno: {e}")
             return 'white'  # Color por defecto en caso de error
 
     def agregar_doble_click(self):
@@ -330,7 +809,7 @@ class AppTurnosPeluqueria:
                     messagebox.showwarning('Error', 'Formato de fecha inválido. Use DD/MM/AAAA')
                     return
                 
-                # Actualizar en BD
+                # ✅ CORRECCIÓN: Actualizar con índices correctos
                 self.cursor.execute('''
                     UPDATE turnos SET nombre=?, telefono=?, servicio=?, estilista=?, 
                     manicura=?, servicios_manicura=?, fecha=?, hora=? WHERE id=?
@@ -582,7 +1061,106 @@ Confirmamos tu turno en *NEW STATION - Pueyrredon*:
         combo_año.bind('<<ComboboxSelected>>', lambda e: actualizar_calendario())
         actualizar_calendario()
 
-    def buscar_turnos(self):
+    # ============================================================
+    # 🆕 NUEVO SISTEMA DE BÚSQUEDAS SEPARADAS - CORREGIDO
+    # ============================================================
+
+    def buscar_por_estilista(self):
+        """Búsqueda especializada por estilista"""
+        texto = self.entry_busqueda.get().strip()
+        if not texto:
+            messagebox.showwarning('Búsqueda', 'Ingrese el nombre del estilista')
+            return
+        
+        self.ejecutar_busqueda_especializada('estilista', texto, 'estilista')
+
+    def buscar_por_cliente(self):
+        """Búsqueda especializada por nombre de cliente"""
+        texto = self.entry_busqueda.get().strip()
+        if not texto:
+            messagebox.showwarning('Búsqueda', 'Ingrese el nombre del cliente')
+            return
+        
+        self.ejecutar_busqueda_especializada('cliente', texto, 'nombre')
+
+    def buscar_por_telefono(self):
+        """Búsqueda especializada por teléfono"""
+        texto = self.entry_busqueda.get().strip()
+        if not texto:
+            messagebox.showwarning('Búsqueda', 'Ingrese el número de teléfono')
+            return
+        
+        self.ejecutar_busqueda_especializada('teléfono', texto, 'telefono')
+
+    def buscar_por_fecha(self):
+        """Búsqueda especializada por fecha"""
+        texto = self.entry_busqueda.get().strip()
+        if not texto:
+            messagebox.showwarning('Búsqueda', 'Ingrese la fecha (DD/MM/AAAA)')
+            return
+        
+        # Validar formato de fecha
+        try:
+            datetime.strptime(texto, '%d/%m/%Y')
+        except ValueError:
+            messagebox.showwarning('Error', 'Formato de fecha inválido. Use DD/MM/AAAA')
+            return
+        
+        self.ejecutar_busqueda_especializada('fecha', texto, 'fecha')
+
+    def ejecutar_busqueda_especializada(self, tipo, texto, campo_bd):
+        """Ejecuta la búsqueda especializada en la base de datos - CORREGIDO"""
+        try:
+            for item in self.tabla.get_children(): 
+                self.tabla.delete(item)
+            
+            # Convertir formato de fecha si es búsqueda por fecha
+            if campo_bd == 'fecha':
+                try:
+                    fecha_obj = datetime.strptime(texto, '%d/%m/%Y')
+                    texto_bd = fecha_obj.strftime('%Y-%m-%d')
+                except:
+                    texto_bd = texto
+            else:
+                texto_bd = texto
+
+            # Consulta específica según el tipo de búsqueda
+            if campo_bd in ['nombre', 'telefono', 'estilista']:
+                query = f'SELECT * FROM turnos WHERE {campo_bd} LIKE ? ORDER BY fecha ASC, hora ASC'
+                parametros = (f'%{texto_bd}%',)
+            else:  # Para fecha
+                query = 'SELECT * FROM turnos WHERE fecha LIKE ? ORDER BY hora ASC'
+                parametros = (f'{texto_bd}%',)  # Usar LIKE para coincidir con fechas que tengan hora
+
+            self.cursor.execute(query, parametros)
+            turnos = self.cursor.fetchall()
+            
+            if turnos:
+                for turno in turnos:
+                    # ✅ CORRECCIÓN DEFINITIVA: Índices correctos según estructura de BD
+                    turno_formateado = self.formatear_turno_para_tabla(turno)
+                    
+                    color_fondo = self.determinar_color_turno(turno[7], turno[8])  # fecha, hora
+                    item = self.tabla.insert('', tk.END, values=turno_formateado)
+                    self.tabla.item(item, tags=(color_fondo,))
+                    self.tabla.tag_configure(color_fondo, background=color_fondo)
+
+                self.label_estado.config(
+                    text=f'✅ {len(turnos)} turnos encontrados por {tipo} "{texto}"', 
+                    fg=self.estilos['exito']
+                )
+            else:
+                self.tabla.insert('', tk.END, values=('', f'No se encontraron turnos para {tipo} "{texto}"', '', '', '', '', '', '', ''))
+                self.label_estado.config(
+                    text=f'❌ No se encontraron turnos para {tipo} "{texto}"', 
+                    fg=self.estilos['peligro']
+                )
+
+        except Exception as err:
+            messagebox.showerror('Error BD', f'No se pudieron buscar los turnos: {err}')
+
+    def buscar_turnos_general(self):
+        """Búsqueda general (comportamiento original) - CORREGIDO"""
         texto_busqueda = self.entry_busqueda.get().strip().lower()
         
         if not texto_busqueda:
@@ -593,7 +1171,6 @@ Confirmamos tu turno en *NEW STATION - Pueyrredon*:
             for item in self.tabla.get_children(): 
                 self.tabla.delete(item)
             
-            # ✅ CORRECCIÓN 2: Búsqueda mejorada que prioriza clientes
             self.cursor.execute('''
                 SELECT * FROM turnos 
                 WHERE LOWER(nombre) LIKE ? 
@@ -608,28 +1185,16 @@ Confirmamos tu turno en *NEW STATION - Pueyrredon*:
             ''', (
                 f'%{texto_busqueda}%', f'%{texto_busqueda}%', f'%{texto_busqueda}%',
                 f'%{texto_busqueda}%', f'%{texto_busqueda}%', f'%{texto_busqueda}%',
-                f'%{texto_busqueda}%'  # Para el ORDER BY
+                f'%{texto_busqueda}%'
             ))
 
             turnos = self.cursor.fetchall()
             
             if turnos:
                 for turno in turnos:
-                    fecha_sql = turno[6]
-                    try:
-                        fecha_obj = datetime.strptime(fecha_sql, '%Y-%m-%d')
-                        fecha_mostrar = fecha_obj.strftime('%d/%m/%Y')
-                    except: 
-                        fecha_mostrar = fecha_sql
-
-                    turno_formateado = (
-                        turno[0], turno[1], turno[2], turno[4], turno[3], 
-                        turno[5], turno[9] if len(turno) > 9 else '', 
-                        fecha_mostrar, turno[7] if len(turno) > 7 else ''
-                    )
+                    turno_formateado = self.formatear_turno_para_tabla(turno)
                     
-                    # Aplicar color según fecha/hora
-                    color_fondo = self.determinar_color_turno(fecha_mostrar, turno[7])
+                    color_fondo = self.determinar_color_turno(turno[7], turno[8])  # fecha, hora
                     item = self.tabla.insert('', tk.END, values=turno_formateado)
                     self.tabla.item(item, tags=(color_fondo,))
                     self.tabla.tag_configure(color_fondo, background=color_fondo)
@@ -641,6 +1206,40 @@ Confirmamos tu turno en *NEW STATION - Pueyrredon*:
 
         except Exception as err:
             messagebox.showerror('Error BD', f'No se pudieron buscar los turnos: {err}')
+
+    def formatear_turno_para_tabla(self, turno):
+        """✅ CORRECCIÓN DEFINITIVA: Formatea un turno para mostrar en la tabla"""
+        # ÍNDICES CORRECTOS según estructura de BD:
+        # 0: id, 1: nombre, 2: telefono, 3: servicio, 4: estilista, 
+        # 5: manicura, 6: servicios_manicura, 7: fecha, 8: hora
+        
+        fecha_sql = turno[7]  # Fecha en posición 7
+        hora_turno = turno[8]  # Hora en posición 8
+        servicios_manicura = turno[6] if turno[6] else ''  # ✅ SERVICIOS DE MANICURA en posición 6
+        
+        # Extraer solo la parte de la fecha (sin hora) para mostrar
+        try:
+            if ' ' in str(fecha_sql):
+                fecha_obj = datetime.strptime(fecha_sql.split(' ')[0], '%Y-%m-%d')
+            else:
+                fecha_obj = datetime.strptime(fecha_sql, '%Y-%m-%d')
+            
+            fecha_mostrar = fecha_obj.strftime('%d/%m/%Y')  # ✅ "08/10/2025"
+        except Exception as e:
+            print(f"❌ Error al formatear fecha {fecha_sql}: {e}")
+            fecha_mostrar = fecha_sql
+
+        return (
+            turno[0],  # ID
+            turno[1],  # Nombre
+            turno[2],  # Teléfono
+            turno[4],  # Estilista
+            turno[3],  # Servicio
+            turno[5],  # Manicura
+            servicios_manicura,  # ✅ SERVICIOS DE MANICURA (texto correcto)
+            fecha_mostrar,  # Fecha formateada
+            hora_turno  # Hora
+        )
 
     def mostrar_todos(self):
         self.entry_busqueda.delete(0, tk.END)
@@ -659,7 +1258,13 @@ Confirmamos tu turno en *NEW STATION - Pueyrredon*:
 
         title_frame = tk.Frame(frame_header, bg='white')
         title_frame.pack(expand=True, pady=20)
-        tk.Label(title_frame, text='SISTEMA DE GESTION DE TURNOS + WHATSAPP', font=('Arial', 16, 'bold'), bg='white', fg=self.estilos['texto_oscuro']).pack()
+        tk.Label(title_frame, text='SISTEMA DE GESTION DE TURNOS', font=('Arial', 16, 'bold'), bg='white', fg=self.estilos['texto_oscuro']).pack()
+
+        # 🆕 BOTÓN DE GESTIÓN DE AUSENCIAS EN EL HEADER
+        btn_ausencias = tk.Button(frame_header, text='📅 GESTIONAR AUSENCIAS', 
+                                bg='#6f42c1', fg='white', font=('Arial', 11, 'bold'),
+                                padx=15, pady=8, command=self.gestionar_ausencias)
+        btn_ausencias.pack(side=tk.RIGHT, padx=30)
 
         # CONTENIDO PRINCIPAL
         frame_main = tk.Frame(self.root, bg=self.estilos['fondo'])
@@ -748,7 +1353,7 @@ Confirmamos tu turno en *NEW STATION - Pueyrredon*:
         btn_actualizar = self.crear_boton_redondeado(frame_botones, 'ACTUALIZAR', self.estilos['info'], self.cargar_turnos, width=12)
         btn_actualizar.pack(side=tk.LEFT)
 
-        # TABLA DERECHA
+        # TABLA DERECHA CON NUEVO SISTEMA DE BÚSQUEDAS
         frame_tabla_container = tk.Frame(frame_main, bg=self.estilos['fondo'])
         frame_tabla_container.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
@@ -760,27 +1365,77 @@ Confirmamos tu turno en *NEW STATION - Pueyrredon*:
         tk.Label(frame_tabla_header, text='TURNOS REGISTRADOS', font=('Arial', 14, 'bold'), 
                 bg=self.estilos['primario'], fg='white', padx=20, pady=15).pack()
 
-        # BARRA DE BUSQUEDA
-        frame_busqueda = tk.Frame(frame_tabla_card, bg='white', padx=15, pady=5)
+        # 🆕 NUEVA BARRA DE BÚSQUEDAS ESPECIALIZADAS
+        frame_busqueda = tk.Frame(frame_tabla_card, bg='white', padx=15, pady=10)
         frame_busqueda.pack(fill=tk.X)
 
-        tk.Label(frame_busqueda, text='Buscar:', bg='white', font=('Arial', 10, 'bold')).pack(side=tk.LEFT, padx=(0, 10))
-        self.entry_busqueda = tk.Entry(frame_busqueda, font=('Arial', 10), relief='solid', bd=1, bg='white', width=25)
-        self.entry_busqueda.pack(side=tk.LEFT, padx=(0, 10))
-        self.entry_busqueda.bind('<Return>', lambda e: self.buscar_turnos())
+        # Fila 1: Búsqueda general
+        frame_busqueda_general = tk.Frame(frame_busqueda, bg='white')
+        frame_busqueda_general.pack(fill=tk.X, pady=(0, 8))
 
-        btn_buscar = tk.Button(frame_busqueda, text='BUSCAR', bg=self.estilos['info'], fg='white',
-                             font=('Arial', 9, 'bold'), command=self.buscar_turnos)
-        btn_buscar.pack(side=tk.LEFT, padx=(0, 5))
-        btn_todos = tk.Button(frame_busqueda, text='MOSTRAR TODOS', bg=self.estilos['secundario'], fg='white',
-                            font=('Arial', 9, 'bold'), command=self.mostrar_todos)
+        tk.Label(frame_busqueda_general, text='Buscar:', bg='white', font=('Arial', 10, 'bold')).pack(side=tk.LEFT, padx=(0, 10))
+        self.entry_busqueda = tk.Entry(frame_busqueda_general, font=('Arial', 10), relief='solid', bd=1, bg='white', width=25)
+        self.entry_busqueda.pack(side=tk.LEFT, padx=(0, 10))
+        self.entry_busqueda.bind('<Return>', lambda e: self.buscar_turnos_general())
+
+        # ✅ BOTONES CON TAMAÑO ORIGINAL
+        btn_buscar_general = tk.Button(frame_busqueda_general, text='🔍 BUSCAR GENERAL', bg='#007bff', fg='white',
+                                     font=('Arial', 9, 'bold'), command=self.buscar_turnos_general,
+                                     padx=8, pady=6, width=15)  # ✅ Tamaño original
+        btn_buscar_general.pack(side=tk.LEFT, padx=(0, 5))
+
+        btn_todos = tk.Button(frame_busqueda_general, text='📋 MOSTRAR TODOS', bg='#6c757d', fg='white',
+                            font=('Arial', 9, 'bold'), command=self.mostrar_todos,
+                            padx=8, pady=6, width=15)  # ✅ Tamaño original
         btn_todos.pack(side=tk.LEFT)
 
-        self.label_estado = tk.Label(frame_busqueda, text='Mostrando todos los turnos', 
-                               bg='white', font=('Arial', 9), fg=self.estilos['info'])
-        self.label_estado.pack(side=tk.RIGHT)
+        # Fila 2: Búsquedas especializadas
+        frame_busqueda_especializada = tk.Frame(frame_busqueda, bg='white')
+        frame_busqueda_especializada.pack(fill=tk.X)
 
-        # TABLA CON COLORES
+        tk.Label(frame_busqueda_especializada, text='Búsquedas rápidas:', bg='white', 
+                 font=('Arial', 10, 'bold'), fg='#343a40').pack(side=tk.LEFT, padx=(0, 10))
+
+        # Botones coloridos
+        btn_estilista = tk.Button(frame_busqueda_especializada, text='✂️ POR ESTILISTA', bg='#e83e8c', fg='white',
+                                font=('Arial', 9, 'bold'), command=self.buscar_por_estilista,
+                                padx=10, pady=5)
+        btn_estilista.pack(side=tk.LEFT, padx=(0, 5))
+
+        btn_cliente = tk.Button(frame_busqueda_especializada, text='👤 POR CLIENTE', bg='#20c997', fg='white',
+                              font=('Arial', 9, 'bold'), command=self.buscar_por_cliente,
+                              padx=10, pady=5)
+        btn_cliente.pack(side=tk.LEFT, padx=(0, 5))
+
+        btn_telefono = tk.Button(frame_busqueda_especializada, text='📞 POR TELÉFONO', bg='#fd7e14', fg='white',
+                               font=('Arial', 9, 'bold'), command=self.buscar_por_telefono,
+                               padx=10, pady=5)
+        btn_telefono.pack(side=tk.LEFT, padx=(0, 5))
+
+        btn_fecha = tk.Button(frame_busqueda_especializada, text='📅 POR FECHA', bg='#6f42c1', fg='white',
+                            font=('Arial', 9, 'bold'), command=self.buscar_por_fecha,
+                            padx=10, pady=5)
+        btn_fecha.pack(side=tk.LEFT)
+
+        # ✅ BOTONES DE ACCIÓN EN POSICIÓN MÁS VISIBLE (ARRIBA DE LA TABLA)
+        frame_acciones_superiores = tk.Frame(frame_busqueda, bg='white', pady=8)
+        frame_acciones_superiores.pack(fill=tk.X, pady=(8, 0))
+        
+        btn_whatsapp_superior = self.crear_boton_redondeado(frame_acciones_superiores, '📱 ENVIAR WHATSAPP', self.estilos['whatsapp'], self.enviar_whatsapp, width=18)
+        btn_whatsapp_superior.pack(side=tk.LEFT, padx=(0, 10))
+        
+        btn_eliminar_superior = self.crear_boton_redondeado(frame_acciones_superiores, '🗑️ ELIMINAR', self.estilos['peligro'], self.eliminar_turno, width=12)
+        btn_eliminar_superior.pack(side=tk.LEFT, padx=(0, 10))
+        
+        btn_editar_superior = self.crear_boton_redondeado(frame_acciones_superiores, '📝 EDITAR', self.estilos['info'], self.editar_turno, width=12)
+        btn_editar_superior.pack(side=tk.LEFT)
+
+        # ✅ LABEL DE ESTADO AL MISMO NIVEL QUE BOTONES (CORREGIDO)
+        self.label_estado = tk.Label(frame_acciones_superiores, text='Mostrando todos los turnos', 
+                           bg='white', font=('Arial', 9), fg=self.estilos['info'])
+        self.label_estado.pack(side=tk.RIGHT, padx=(0, 10))
+
+        # TABLA
         frame_tabla_content = tk.Frame(frame_tabla_card, bg='white')
         frame_tabla_content.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
@@ -788,7 +1443,6 @@ Confirmamos tu turno en *NEW STATION - Pueyrredon*:
                                 columns=('ID', 'Nombre', 'Tel', 'Estilista', 'Servicios', 'Manicura', 'ServManicura', 'Fecha', 'Hora'), 
                                 show='headings', height=15)
 
-        # COLUMNAS
         columnas = [
             ('ID', 40),
             ('Nombre', 150),
@@ -816,111 +1470,21 @@ Confirmamos tu turno en *NEW STATION - Pueyrredon*:
         frame_tabla_content.grid_rowconfigure(0, weight=1)
         frame_tabla_content.grid_columnconfigure(0, weight=1)
 
-        # BOTONES DE ACCIÓN
-        frame_botones_accion = tk.Frame(frame_tabla_card, bg='white', pady=15)
+        # ✅ MANTENER BOTONES INFERIORES TAMBIÉN (PARA MÚLTIPLES OPCIONES)
+        frame_botones_accion = tk.Frame(frame_tabla_card, bg='white', pady=10)
         frame_botones_accion.pack(fill=tk.X)
         
         btn_whatsapp = self.crear_boton_redondeado(frame_botones_accion, '📱 ENVIAR WHATSAPP', self.estilos['whatsapp'], self.enviar_whatsapp, width=18)
         btn_whatsapp.pack(side=tk.LEFT, padx=(0, 10))
         
-        btn_eliminar = self.crear_boton_redondeado(frame_botones_accion, 'ELIMINAR', self.estilos['peligro'], self.eliminar_turno, width=12)
-        btn_eliminar.pack(side=tk.LEFT)
-
-    def agregar_turno(self):
-        nombre = self.entry_nombre.get().strip()
-        telefono = self.entry_telefono.get().strip()
-        servicios = self.entry_servicios.get().strip()
-        estilista = self.combo_estilista.get().strip()
-        manicura = self.combo_manicura.get().strip()
-        servicios_manicura = self.entry_servicios_manicura.get().strip()
-
-        fecha_str = self.entry_fecha.get()
-        try:
-            fecha_obj = datetime.strptime(fecha_str, '%d/%m/%Y')
-            fecha = fecha_obj.strftime('%Y-%m-%d')
-        except ValueError:
-            messagebox.showwarning('Error', 'Formato de fecha inválido. Use DD/MM/AAAA')
-            return
-
-        hora = self.entry_hora.get().strip()
-
-        if not all([nombre, telefono, estilista, manicura, hora]):
-            messagebox.showwarning('Error', 'Complete los campos obligatorios: Nombre, Teléfono, Estilista, Manicura y Hora')
-            return
-
-        # ✅ CORRECCIÓN 1: Validación de turnos duplicados
-        try:
-            # Verificar duplicado exacto (misma persona, misma fecha, misma hora)
-            self.cursor.execute('''
-                SELECT COUNT(*) FROM turnos 
-                WHERE nombre = ? AND fecha = ? AND hora = ?
-            ''', (nombre, fecha, hora))
-            
-            turno_duplicado = self.cursor.fetchone()[0] > 0
-            
-            if turno_duplicado:
-                messagebox.showwarning(
-                    'Turno Duplicado', 
-                    f'❌ Ya existe un turno para {nombre} el {fecha_str} a las {hora}\n\n'
-                    f'Por favor, verifique los datos o elija otra fecha/hora.'
-                )
-                return
-
-            # Validación extra: Verificar superposición de estilista
-            self.cursor.execute('''
-                SELECT COUNT(*) FROM turnos 
-                WHERE estilista = ? AND fecha = ? AND hora = ? AND estilista != "No aplica"
-            ''', (estilista, fecha, hora))
-            
-            estilista_ocupado = self.cursor.fetchone()[0] > 0
-            
-            if estilista_ocupado:
-                respuesta = messagebox.askyesno(
-                    'Estilista Ocupado', 
-                    f'⚠️ {estilista} ya tiene un turno el {fecha_str} a las {hora}\n\n'
-                    f'¿Desea agregar el turno de todas formas?'
-                )
-                if not respuesta:
-                    return
-
-            # Validación extra: Verificar superposición de manicura
-            self.cursor.execute('''
-                SELECT COUNT(*) FROM turnos 
-                WHERE manicura = ? AND fecha = ? AND hora = ? AND manicura != "No aplica"
-            ''', (manicura, fecha, hora))
-            
-            manicura_ocupada = self.cursor.fetchone()[0] > 0
-            
-            if manicura_ocupada:
-                respuesta = messagebox.askyesno(
-                    'Manicura Ocupada', 
-                    f'⚠️ {manicura} ya tiene un turno el {fecha_str} a las {hora}\n\n'
-                    f'¿Desea agregar el turno de todas formas?'
-                )
-                if not respuesta:
-                    return
-
-        except Exception as err:
-            print(f"❌ Error en validación: {err}")
-            # Continuar con la inserción si hay error en la validación
-
-        # Si pasó todas las validaciones, insertar el turno
-        try:
-            self.cursor.execute('''
-                INSERT INTO turnos 
-                (nombre, telefono, servicio, estilista, manicura, servicios_manicura, fecha, hora)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (nombre, telefono, servicios, estilista, manicura, servicios_manicura, fecha, hora))
-
-            self.conexion.commit()
-            messagebox.showinfo('Éxito', '✅ Turno agregado correctamente')
-            self.limpiar_formulario()
-            self.cargar_turnos()
-        except Exception as err:
-            print(f"❌ Error al agregar: {err}")
-            messagebox.showerror('Error BD', f'No se pudo agregar: {err}')
+        btn_eliminar = self.crear_boton_redondeado(frame_botones_accion, '🗑️ ELIMINAR', self.estilos['peligro'], self.eliminar_turno, width=12)
+        btn_eliminar.pack(side=tk.LEFT, padx=(0, 10))
+        
+        btn_editar = self.crear_boton_redondeado(frame_botones_accion, '📝 EDITAR', self.estilos['info'], self.editar_turno, width=12)
+        btn_editar.pack(side=tk.LEFT)
 
     def cargar_turnos(self):
+        """Cargar todos los turnos - CORREGIDO: Usa la función formatear_turno_para_tabla"""
         try:
             for item in self.tabla.get_children(): 
                 self.tabla.delete(item)
@@ -930,21 +1494,9 @@ Confirmamos tu turno en *NEW STATION - Pueyrredon*:
 
             if turnos:
                 for turno in turnos:
-                    fecha_sql = turno[6]
-                    try:
-                        fecha_obj = datetime.strptime(fecha_sql, '%Y-%m-%d')
-                        fecha_mostrar = fecha_obj.strftime('%d/%m/%Y')
-                    except: 
-                        fecha_mostrar = fecha_sql
-
-                    turno_formateado = (
-                        turno[0], turno[1], turno[2], turno[4], turno[3], 
-                        turno[5], turno[9] if len(turno) > 9 else '', 
-                        fecha_mostrar, turno[7] if len(turno) > 7 else ''
-                    )
+                    turno_formateado = self.formatear_turno_para_tabla(turno)
                     
-                    # Aplicar color según fecha/hora
-                    color_fondo = self.determinar_color_turno(fecha_mostrar, turno[7])
+                    color_fondo = self.determinar_color_turno(turno[7], turno[8])  # fecha, hora
                     item = self.tabla.insert('', tk.END, values=turno_formateado)
                     self.tabla.item(item, tags=(color_fondo,))
                     self.tabla.tag_configure(color_fondo, background=color_fondo)

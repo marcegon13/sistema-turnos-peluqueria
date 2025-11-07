@@ -2,10 +2,10 @@
 
 
 a = Analysis(
-    ['SistemaTurnos.py'],
+    ['Sistematurnos.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('turnos_peluqueria.db', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -29,7 +29,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
